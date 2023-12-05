@@ -1,0 +1,7 @@
+Clamp:
+  out_min: -500
+  out_max: 1000
+Resample:
+  target: !!python/tuple [1, 1, 2]
+RescaleIntensity:
+  out_min_max: !!python/tuple [0, 1]

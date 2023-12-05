@@ -1,0 +1,53 @@
+title: test
+project_dir: '/home/jhhan/01_research/01_MICCAI/01_grandchellenge/han_seg/src/HanSeg_2023/experiments'
+seed: 42
+
+experiment:
+  name: Anchor # Anchor, MidLine, SmallandHard #Segmentation metadata
+
+data_loader:
+  dataset: /home/jhhan/01_research/01_MICCAI/01_grandchellenge/han_seg/data/custom/anchor
+  kfold: 5  # 1 is not use kfold validation other is use kfold validation
+  batch_size: 1
+  num_workers: 4
+  patch_shape:
+  - 80
+  - 80
+  - 80
+  resize_shape:
+  - 168
+  - 280
+  - 360
+  sampler_type: WeightedSampler 
+
+augmentations:
+  RandomAffine:
+   scales: !!python/tuple [ 0.5, 1.5 ]
+   degrees: !!python/tuple [ 10, 10 ]
+   isotropic: false
+   image_interpolation: linear
+   p: 0.5
+  RandomFlip:
+    axes: 2
+    flip_probability: 0.5
+
+model:
+  name: AttentionUnet3D
+
+loss:
+  name: BCEDiceFocalLoss
+
+lr_scheduler:
+  name: Plateau
+
+optimizer:
+  learning_rate: 0.1
+  name: SGD
+
+trainer:
+  reload: False
+  checkpoint: ''
+  do_train: True
+  do_test: False
+  do_inference: False
+  epochs: 1000
