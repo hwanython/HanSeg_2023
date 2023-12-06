@@ -2,7 +2,7 @@ import numpy as np
 import torch
 from torch import nn, Tensor
 import torch.nn.functional as F
-
+from monai.losses import DiceCELoss
 
 class LossFactory:
     def __init__(self, names, classes, weights=None):
@@ -21,10 +21,10 @@ class LossFactory:
     def get_loss(self, name):
         if name == 'JaccardLoss':
             loss_fn = JaccardLoss(weight=self.weights)
-        elif name == 'BCEWithLogitsViewLoss':
-            loss_fn = BCEWithLogitsViewLoss(weight=self.weights)
-        elif name == 'BCEDiceFocalLoss':
-            loss_fn = BCEDiceFocalLoss(focal_param=2)
+        elif name == 'Dice3DLoss':
+            loss_fn = Dice3DLoss(weight=self.weights)
+        elif name == 'DiceCELoss':
+            loss_fn = DiceCELoss(self.classes, to_onehot_y=False, softmax=True)
         elif name == 'DiceLoss':
             loss_fn = DiceLoss(self.classes)
         elif name == 'BoundaryLoss':
@@ -70,11 +70,10 @@ class DiceLoss(nn.Module):
         self.classes = classes
 
     def forward(self, pred, gt):
-        included = [v for k, v in self.classes.items() if k not in ['UNLABELED']]
-        gt_onehot = torch.nn.functional.one_hot(gt.squeeze().long(), num_classes=len(self.classes))
-        if gt.shape[0] == 1:  # we need to add a further axis after the previous squeeze()
-            gt_onehot = gt_onehot.unsqueeze(0)
-
+        # included = [v for k, v in self.classes.items() if k not in ['UNLABELED']]
+        gt_onehot = torch.nn.functional.one_hot(gt.squeeze().long(), num_classes=self.classes)
+        # if gt.shape[0] = 1:  # we need to add a further axis after the previous squeeze()
+        gt_onehot = gt_onehot.unsqueeze(0)
         gt_onehot = torch.movedim(gt_onehot, -1, 1)
         input_soft = F.softmax(pred, dim=1)
         dims = (2, 3, 4)
@@ -82,92 +81,78 @@ class DiceLoss(nn.Module):
         intersection = torch.sum(input_soft * gt_onehot, dims)
         cardinality = torch.sum(input_soft + gt_onehot, dims)
         dice_score = 2. * intersection / (cardinality + self.eps)
-        return 1. - dice_score[:, included]
+        return 1. - torch.mean(dice_score)
+    
 
-class BCEDiceFocalLoss(nn.Module):
-    '''
-        :param num_classes: number of classes
-        :param gamma: (float,double) gamma > 0 reduces the relative loss for well-classified examples (p>0.5) putting more
-                            focus on hard misclassified example
-        :param size_average: (bool, optional) By default, the losses are averaged over each loss element in the batch.
-        :param weights: (list(), default = [1,1,1]) Optional weighing (0.0-1.0) of the losses in order of [bce, dice, focal]
-    '''
-
-    def __init__(self, focal_param, weights=None, **kwargs):
-        if weights is None:
-            weights = [0.1, 1.0, 1.0]
-        super(BCEDiceFocalLoss, self).__init__()
-        self.bce = BCEWithLogitsViewLoss(weight=None, size_average=True, **kwargs)
-        self.dice = SoftDiceLoss(**kwargs)
-        self.focal = FocalLoss(l=focal_param, **kwargs)
-        self.weights = weights
-
-    def forward(self, logits, labels, **_):
-        return self.weights[0] * self.bce(logits, labels) + self.weights[1] * self.dice(logits, labels) + self.weights[
-            2] * self.focal(logits.unsqueeze(1), labels.unsqueeze(1))
+import torch
 
 
-class SoftDiceLoss(nn.Module):
-    def __init__(self, smooth=1.0, **_):
-        super(SoftDiceLoss, self).__init__()
-        self.smooth = smooth
-
-    def forward(self, logits, labels, **_):
-        num = labels.size(0)
-        probs = torch.sigmoid(logits)
-        m1 = probs.view(num, -1)
-        m2 = labels.view(num, -1)
-        intersection = (m1 * m2)
-
-        # smooth = 1.
-
-        score = 2. * (intersection.sum(1) + self.smooth) / (m1.sum(1) + m2.sum(1) + self.smooth)
-        score = 1 - score.sum() / num
-        return score
-
-
-class FocalLoss(nn.Module):
+def flatten(tensor):
+    """Flattens a given tensor such that the channel axis is first.
+    The shapes are transformed as follows:
+       (N, C, D, H, W) -> (C, N * D * H * W)
     """
-    Weighs the contribution of each sample to the loss based in the classification error.
-    If a sample is already classified correctly by the CNN, its contribution to the loss decreases.
+    # number of channels
+    C = tensor.size(1)
+    # new axis order
+    axis_order = (1, 0) + tuple(range(2, tensor.dim()))
+    # Transpose: (N, C, D, H, W) -> (C, N, D, H, W)
+    transposed = tensor.permute(axis_order)
+    # Flatten: (C, N, D, H, W) -> (C, N * D * H * W)
+    return transposed.contiguous().view(C, -1)
 
-    :eps: Focusing parameter. eps=0 is equivalent to BCE_loss
+
+def compute_per_channel_dice(input, target, epsilon=1e-6, weight=None):
+    """
+    Computes DiceCoefficient as defined in https://arxiv.org/abs/1606.04797 given  a multi channel input and target.
+    Assumes the input is a normalized probability, e.g. a result of Sigmoid or Softmax function.
+    Ref: https://github.com/wolny/pytorch-3dunet/blob/master/pytorch3dunet/unet3d/losses.py
+
+    Args:
+         input (torch.Tensor): NxCxSpatial input tensor
+         target (torch.Tensor): NxCxSpatial target tensor
+         epsilon (float): prevents division by zero
+         weight (torch.Tensor): Cx1 tensor of weight per channel/class
     """
 
-    def __init__(self, l=0.5, eps=1e-6, **_):
-        super(FocalLoss, self).__init__()
-        self.l = l
-        self.eps = eps
+    # input and target shapes must match
+    assert input.size() == target.size(), "'input' and 'target' must have the same shape"
 
-    def forward(self, logits, labels, **_):
-        labels = labels.view(-1)
-        probs = torch.sigmoid(logits).view(-1)
+    input = flatten(input)
+    target = flatten(target)
+    target = target.float()
 
-        losses = -(labels * torch.pow((1. - probs), self.l) * torch.log(probs + self.eps) + \
-                   (1. - labels) * torch.pow(probs, self.l) * torch.log(1. - probs + self.eps))
-        loss = torch.mean(losses)
+    # compute per channel Dice Coefficient
+    intersect = (input * target).sum(-1)
+    if weight is not None:
+        intersect = weight * intersect
 
-        return loss
+    # here we can use standard dice (input + target).sum(-1) or extension (see V-Net) (input^2 + target^2).sum(-1)
+    denominator = (input * input).sum(-1) + (target * target).sum(-1)
+    # return 2 * (intersect / denominator.clamp(min=epsilon))
+    return 2 * ((intersect + epsilon) / (denominator + epsilon))
 
 
-# ==== Custom ==== #
-class BCEWithLogitsViewLoss(nn.BCEWithLogitsLoss):
-    '''
-    Silly wrapper of nn.BCEWithLogitsLoss because BCEWithLogitsLoss only takes a 1-D array
-    '''
+class Dice3DLoss(torch.nn.Module):
+    """Computes Dice Loss according to https://arxiv.org/abs/1606.04797.
+    For multi-class segmentation `weight` parameter can be used to assign different weights per class.
 
-    def __init__(self, weight=None, size_average=True, **_):
-        super().__init__(weight=weight, size_average=size_average)
+    Args:
+         input (torch.Tensor): NxCxDxHxW input tensor
+         target (torch.Tensor): NxCxDxHxW target tensor
+    """
 
-    def forward(self, input_, target, **_):
-        '''
-        :param input_:
-        :param target:
-        :return:
+    def __init__(self, weight=None):
+        super(Dice3DLoss, self).__init__()
+        self.register_buffer('weight', weight)
+        self.weight = weight
 
-        Simply passes along input.view(-1), target.view(-1)
-        '''
-        return super().forward(input_.view(-1), target.view(-1))
+    def forward(self, input, target):
+        # compute per channel Dice coefficient
+        per_channel_dice = compute_per_channel_dice(input, target, weight=self.weight)
+
+        # average Dice score across all channels/classes
+        return 1. - torch.mean(per_channel_dice), per_channel_dice
 
 
 class BoundaryLoss(torch.nn.Module):

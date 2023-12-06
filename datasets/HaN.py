@@ -7,7 +7,7 @@ import nrrd
 import numpy as np
 import torch
 import torchio as tio
-
+from datasets.label_dict import LABEL_dict, Anchor_dict   # from datasets/label_dict.py
 from torch.utils.data import DataLoader
 from datasets.SamplerFactory import SamplerFactory
 
@@ -15,13 +15,14 @@ class HaN(tio.SubjectsDataset):
     """
     MICCAI dataset
     """
-
-    def __init__(self, root, filename, splits, transform=None, sampler=None, **kwargs):
-        root = Path(root)
+    def __init__(self, config, splits, transform=None, sampler=None, **kwargs):
+        self.config = config
+        self.root = Path(self.config.data_loader.dataset)
         if not isinstance(splits, list):
             splits = [splits]
+        self.seed = self.config.seed
         self.sampler = sampler
-        subjects_list = self._get_subjects_list(root, filename, splits)
+        subjects_list = self._get_subjects_list(self.root, splits)
         super().__init__(subjects_list, transform, **kwargs)
 
     def _numpy_reader(self, path):
@@ -34,36 +35,59 @@ class HaN(tio.SubjectsDataset):
         data = torch.from_numpy(raw_data).float()
         affine = torch.eye(4, requires_grad=False)  # Identity matrix(단위 행렬)
         return data, affine
+    
+    def _split_data(self, data_list):
+        # train and val data split
+        np.random.seed(self.seed)
+        split_ratio = 0.8
+        train_size = int(split_ratio * len(data_list))
+        val_size = int((len(data_list) - train_size))
+        train_data = data_list[:train_size]
+        val_data = data_list[train_size:train_size+val_size]
+        return train_data, val_data
+    
+    def _generate_jsondata(self, train_data: list, val_data: list, test_data=None):
+        if test_data:
+            test_data = test_data
+        else:
+            test_data = val_data
+            
+        json_data = {
+                'train': train_data,
+                'val': val_data,
+                 "test": test_data
+            }
+        return json_data
 
-    def _get_subjects_list(self, root, filename, splits):
+    def _get_subjects_list(self, root, splits):
         # TODO : check the path
-        dense_dir = root / 'labels'
-        data_dir = root / 'dicom'
-        splits_path = root / filename
-        # load splits json file
-        # care the json file ','. Do not write the ',' on behind of last item!!
-
-        # TODO: change the method, reading whole list and split train/val/test and kfold
-        with open(splits_path) as splits_file:
-            json_splits = json.load(splits_file)
+        patient_data_list = os.listdir(root)
+        # TODO: change the method, reading whole list and split train/val/test and kfold       
+        if self.config.data_loader.kfold == 1:
+            train_data, val_data = self._split_data(patient_data_list)
+            json_splits = self._generate_jsondata(train_data, val_data)
 
         # consists of the data sets
         subjects = []
         for split in splits:
             for patient in json_splits[split]:
-                data_path = os.path.join(data_dir, patient + '.nrrd')
-                # TODO : check the path
-                dense_path = os.path.join(dense_dir, patient + '_dense.seg.nrrd')
-                if not os.path.isfile(data_path):
-                    raise ValueError(f'Missing data file for patient {patient} ({data_path})')
-                if not os.path.isfile(dense_path):
-                    raise ValueError(f'Missing dense file for patient {patient} ({dense_path})')
+                # generate labels
+                ct_data_path = os.path.join(root, patient, patient + '_IMG_CT.nrrd')
+                # mr_data_path = os.path.join(root, patient, patient + '_IMG_MR_T1.nrrd')
+                label_path = os.path.join(root, patient, patient + f'_{self.config.experiment.name}.seg.nrrd')
+                if not os.path.isfile(ct_data_path):
+                    raise ValueError(f'Missing CT data file for patient {patient} ({ct_data_path})')
+                # if not os.path.isfile(mr_data_path):
+                    # raise ValueError(f'Missing MR_TI data file for patient {patient} ({mr_data_path})')
+                if not os.path.isfile(label_path):
+                    raise ValueError(f'Missing LABEL file for patient {patient} ({label_path})')
 
                 subject_dict = {
                     'partition': split,
                     'patient': patient,
-                    'data': tio.ScalarImage(data_path, reader=self._nrrd_reader),
-                    'label': tio.LabelMap(dense_path, reader=self._nrrd_reader),
+                    'ct': tio.ScalarImage(ct_data_path, reader=self._nrrd_reader),
+                    # 'mr': tio.ScalarImage(mr_data_path, reader=self._nrrd_reader),
+                    'label': tio.LabelMap(label_path, reader=self._nrrd_reader),
                 }
 
                 subjects.append(tio.Subject(**subject_dict))

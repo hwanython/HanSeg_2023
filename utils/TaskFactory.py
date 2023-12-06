@@ -11,9 +11,23 @@ class TaskFactory:
             experiment = Segmentation(self.config, self.debug)
         elif self.name == 'Generation':
             experiment = Generation(self.config, self.debug)
+        elif self.name == 'Anchor':
+            experiment = Anchor(self.config, self.debug)
         else:
             raise ValueError(f'Experiment \'{self.name}\' not found')
         return experiment
+
+
+
+
+class Anchor(Experiment):
+    def __init__(self, config, debug=False):
+        self.debug = debug
+        self.train_loader = None
+        self.test_loader = None
+        self.val_loader = None
+        super().__init__(config, self.debug)
+
 
 class Segmentation(Experiment):
     def __init__(self, config, debug=False):

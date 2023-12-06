@@ -1,0 +1,6 @@
+RandomAffine:
+  scales: !!python/tuple [ 0.8, 1.2 ]
+  degrees: !!python/tuple [ -5, 5 ]
+  isotropic: false
+  image_interpolation: linear
+  p: 0.5

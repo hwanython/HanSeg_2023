@@ -28,8 +28,7 @@ import wandb
 
 from utils.TaskFactory import *
 from utils.AugmentFactory import *
-from utils.DataPreprocFactory import *
-from utils.ArrayIOFactory import DicomIO, MedicalIO, NumpyIO
+
 
 # experiment name
 def timehash():
@@ -49,11 +48,11 @@ def setup(seed):
 if __name__ == '__main__':
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
-
+    os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+    os.environ["CUDA_VISIBLE_DEVICES"]= "3"
     # Parse arguments
     arg_parser = argparse.ArgumentParser()
-    # arg_parser.add_argument("-c", "--config", default="configs/config-AttUNet3D-asahi.yaml",
-    arg_parser.add_argument("-c", "--config", default="configs/config-AttUNet3D-osstem.yaml",                            
+    arg_parser.add_argument("-c", "--config", default="configs/config.yaml",      
                             help="the config file to be used to run the experiment")
     arg_parser.add_argument("--verbose", action='store_true', help="Log also to stdout")
     arg_parser.add_argument("--debug", default=False, action='store_true', help="debug, no wandb")
@@ -69,8 +68,6 @@ if __name__ == '__main__':
     config = yaml.load(open(args.config, "r"), yaml.FullLoader)
     config = munchify(config)
 
-
-
     # Setup to be deterministic
     logging.info(f'setup to be deterministic')
     setup(config.seed)
@@ -84,7 +81,7 @@ if __name__ == '__main__':
     # start wandb
     logging.info(f'setup wandb log ...')
     wandb.init(
-        project="On3_dev_nerve",
+        project="HanSeg",
         # entity=config.title,
         config=unmunchify(config)
     )
@@ -95,16 +92,31 @@ if __name__ == '__main__':
     wandb.run.name = config.title
     wandb.run.save()
 
+    # check if preprocessing is set and file exists
+    logging.info(f'loading preprocessing')
+    preprocfile = config.data_loader.preprocessing
+    if config.data_loader.preprocessing is None:
+        preproc = []
+    elif not os.path.exists(config.data_loader.preprocessing):
+        logging.error("Preprocessing file does not exist: {}".format(config.data_loader.preprocessing))
+        preproc = []
+    else:
+        with open(config.data_loader.preprocessing, 'r') as preproc_file:
+            preproc = yaml.load(preproc_file, yaml.FullLoader)
+    config.data_loader.preprocessing = AugFactory(preproc).get_transform()
 
     # check if augmentations is set and file exists
     logging.info(f'loading augmentations')
-    if config.augmentations is None:
+    augfile = config.data_loader.augmentations
+    if config.data_loader.augmentations is None:
+        aug = []
+    elif not os.path.exists(config.data_loader.augmentations):
+        logging.warning(f'Augmentations file does not exist: {config.augmentations}')
         aug = []
     else:
-        aug = config.augmentations
-    config.augmentations = AugFactory(aug).get_transform()
-
-
+        with open(config.data_loader.augmentations) as aug_file:
+            aug = yaml.load(aug_file, yaml.FullLoader)
+    config.data_loader.augmentations = AugFactory(aug).get_transform()
 
     logging.info(f'Instantiation of the experiment')
     # pdb.set_trace()
@@ -128,7 +140,13 @@ if __name__ == '__main__':
 
     # Copy config file to project_dir, to be able to reproduce the experiment
     copy_config_path = os.path.join(project_dir_title, 'config.yaml')
+    copy_augmentations_path = os.path.join(project_dir_title, 'augmentations.yaml')
+    copy_preprocessing_path = os.path.join(project_dir_title, 'preprocessing.yaml')
     shutil.copy(args.config, copy_config_path)
+    if config.data_loader.augmentations is not None:
+        shutil.copy(preprocfile, copy_augmentations_path)
+    if config.data_loader.preprocessing is not None:
+        shutil.copy(augfile, copy_preprocessing_path)
 
     if not os.path.exists(experiment.config.data_loader.dataset):
         logging.error("Dataset path does not exist: {}".format(experiment.config.data_loader.dataset))

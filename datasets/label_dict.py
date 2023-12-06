@@ -31,3 +31,14 @@ LABEL_dict = {
     "Pituitary": 29,
     "SpinalCord": 30,
 }
+
+Anchor_dict = {
+    "background": 0,
+    "Bone_Mandible": 4,
+    "Brainstem": 5,
+    "Eye_AL": 12,
+    "Eye_AR": 13,
+    "Eye_PL": 14,
+    "Eye_PR": 15,
+    "SpinalCord": 30,
+}

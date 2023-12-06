@@ -19,11 +19,8 @@ import torch.utils.data as data
 import wandb
 import torch.nn.functional as F
 from torch import nn
-from torch.nn.parallel import DistributedDataParallel
 from os import path
 from torch.backends import cudnn
-from torch.utils.data import DistributedSampler
-from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from datasets.HaN import HaN
@@ -33,8 +30,7 @@ from libs.optimizers.OptimizerFactory import OptimizerFactory
 from libs.schedulers.SchedulerFactory import SchedulerFactory
 from utils.AugmentFactory import *
 from utils.EvalFactory import Eval as Evaluator
-from utils.DataPreprocFactory import *
-
+from datasets.label_dict import LABEL_dict, Anchor_dict   # from datasets/label_dict.py
 eps = 1e-10
 
 
@@ -44,20 +40,21 @@ class Experiment:
         self.debug = debug
         self.epoch = 0
         self.metrics = {}
+        self.scaler = torch.cuda.amp.GradScaler()
 
-        filename = 'splits.json'
-        if self.debug:
-            filename = 'splits_small.json'
-
-        num_classes = len(self.config.data_loader.labels)
-        if 'Jaccard' in self.config.loss.name or num_classes == 2:
-            num_classes = 1
-
+        # num_classes = len(self.config.data_loader.labels)
+        # if 'Jaccard' in self.config.loss.name or num_classes == 2:
+        num_classes =  len(Anchor_dict) - 1 if self.config.experiment.name == 'Anchor' else len(LABEL_dict) - 1
+        self.num_classes = num_classes
         # load model
         model_name = self.config.model.name
         in_ch = 2 if self.config.experiment.name == 'Generation' else 1
 
         self.model = ModelFactory(model_name, num_classes, in_ch).get().cuda()
+        for m in self.model.modules():
+            for child in m.children():
+                if type(child) == torch.nn.BatchNorm3d:
+                    m.eval()
 
         
         wandb.watch(self.model, log_freq=10)
@@ -85,46 +82,30 @@ class Experiment:
         ).get()
 
         # load loss
-        self.loss = LossFactory(self.config.loss.name, self.config.data_loader.labels)
+        self.loss = LossFactory(self.config.loss.name, classes=num_classes)
 
         # load evaluator
-        self.evaluator = Evaluator(self.config, skip_dump=True)
-
+        self.evaluator = Evaluator(classes=num_classes)
         self.train_dataset = HaN(
-            root=self.config.data_loader.dataset,
-            filename=filename,
+            config = self.config,
             splits='train',
             transform=tio.Compose([
                 # tio.CropOrPad(self.config.data_loader.resize_shape, padding_mode=0),
-                self.config.augmentations,
-                tio.Resize(self.config.data_loader.resize_shape),
-                
+                self.config.data_loader.preprocessing,
+                self.config.data_loader.augmentations,
             ]),
             sampler=self.config.data_loader.sampler_type
         )
         self.val_dataset = HaN(
-            root=self.config.data_loader.dataset,
-            transform=tio.Compose([
-                tio.Resize(self.config.data_loader.resize_shape)]),
-            filename=filename,
+            config = self.config,
             splits='val',
+            transform=self.config.data_loader.preprocessing,
         )
         self.test_dataset = HaN(
-            root=self.config.data_loader.dataset,
-            transform=tio.Compose([
-                tio.Resize(self.config.data_loader.resize_shape)]),
-            filename=filename,
+            config = self.config,
             splits='test',
+            transform=self.config.data_loader.preprocessing,
         )
-
-        self.inference_dataset = HaN(
-            root=self.config.data_loader.dataset,
-            filename=filename,
-            splits='test',
-        )
-
-        # self.test_aggregator = self.train_dataset.get_aggregator(self.config.data_loader)
-        # self.synthetic_aggregator = self.synthetic_dataset.get_aggregator(self.config.data_loader)
 
         # queue start loading when used, not when instantiated
         self.train_loader = self.train_dataset.get_loader(self.config.data_loader)
@@ -167,17 +148,11 @@ class Experiment:
             self.metrics = state['metrics']
 
     def extract_data_from_feature(self, feature):
-        volume = feature['data'][tio.DATA].float().cuda()
-        gt = feature['dense'][tio.DATA].float().cuda()
+        ct_volume = feature['ct'][tio.DATA].float().cuda()
+        # mr_volume = feature['mr'][tio.DATA].float().cuda()
+        gt = feature['label'][tio.DATA].float().cuda()
         # volume = volume/255. # normalization
-
-        if self.config.experiment.name == 'Generation':
-            sparse = feature['sparse'][tio.DATA].float().cuda()
-            images = torch.cat([volume, sparse], dim=1)
-        else:
-            images = volume
-        
-        return images, gt
+        return ct_volume, gt
 
     def train(self):
 
@@ -188,20 +163,28 @@ class Experiment:
         losses = []
         for i, d in tqdm(enumerate(data_loader), total=len(data_loader), desc=f'Train epoch {str(self.epoch)}'):
             images, gt = self.extract_data_from_feature(d)
+            print(images)
 
             self.optimizer.zero_grad()
-            preds = self.model(images)
+            with torch.cuda.amp.autocast():
+                preds = self.model(images) # pred shape B, C(N), H, W, D
+                preds_soft = F.softmax(preds, dim=1)
+                gt_onehot = torch.nn.functional.one_hot(gt.squeeze().long(), num_classes=self.num_classes)
+                gt_onehot = gt_onehot.unsqueeze(0)
+                gt_onehot = torch.movedim(gt_onehot, -1, 1)
+                assert preds_soft.ndim == gt_onehot.ndim, f'Gt and output dimensions are not the same before loss. {preds_soft.ndim} vs {gt_onehot.ndim}'
 
-            assert preds.ndim == gt.ndim, f'Gt and output dimensions are not the same before loss. {preds.ndim} vs {gt.ndim}'
-            loss = self.loss.losses[self.loss.names[0]](preds, gt).cuda()
-            losses.append(loss.item())
-            loss.backward()
-            self.optimizer.step()
+                loss = self.loss.losses[self.loss.names[0]](preds_soft, gt_onehot).cuda()
+                losses.append(loss.item())
 
-            preds = (preds > 0.5).squeeze().detach()
+            self.scaler.scale(loss).backward()
+            # loss.backward()
+            self.scaler.step(self.optimizer)
+            # self.optimizer.step()
+            self.scaler.update()
 
-            gt = gt.squeeze()
-            self.evaluator.compute_metrics(preds, gt)
+            hard_preds = torch.argmax(preds_soft, dim=1)
+            self.evaluator.get_dice(hard_preds, gt)
 
         epoch_train_loss = sum(losses) / len(losses)
         epoch_iou, epoch_dice = self.evaluator.mean_metric(phase='Train')
@@ -241,13 +224,9 @@ class Experiment:
                 output = self.model(images)
                 assert output.ndim == gt.ndim, f'Gt and output dimensions are not the same before loss. {output.ndim} vs {gt.ndim}'
 
-                loss = self.loss.losses[self.loss.names[0]](output.unsqueeze(0), gt.unsqueeze(0)).cuda()
+                loss = self.loss.losses[self.loss.names[0]](output, gt).cuda()
                 losses.append(loss.item())
-
-                output = output.squeeze(0)
-                output = (output > 0.5)
-
-                self.evaluator.compute_metrics(output, gt)
+                self.evaluator.get_dice(output, gt)
 
             epoch_loss = sum(losses) / len(losses)
             epoch_iou, epoch_dice = self.evaluator.mean_metric(phase=phase)
@@ -262,75 +241,6 @@ class Experiment:
             return epoch_iou, epoch_dice
         
 
-    def inference(self, output_path, phase='inference', zslide=False):
+    # def inference(self, output_path, phase='inference', zslide=False):
 
-        self.model.eval()
-
-        with torch.no_grad():
-            torch.cuda.empty_cache()
-
-            if phase == 'Test':
-                dataset = self.test_dataset
-                data_loader = self.test_loader
-            elif phase == 'Validation':
-                dataset = self.val_dataset
-                data_loader = self.val_loader
-            elif phase == 'Train':
-                dataset = self.train_dataset
-                data_loader = self.train_loader
-            elif phase == 'inference':
-                dataset = self.inference_dataset
-                data_loader = self.inference_dataset.get_loader(self.config.data_loader)
-
-
-            for i, (ds, dl) in tqdm(enumerate(zip(dataset._subjects, data_loader)), total=len(data_loader), desc=f'{phase} epoch {str(self.epoch)}'):
-                volume = dl['data'][tio.DATA].float().cuda()
-                input_resize_size = self.config.data_loader.resize_shape
-
-                if zslide:
-                    z_ratio = 0.3
-                    z1 = volume.shape[-3] * z_ratio
-                    _crop1 = tio.Crop((0,int(z1),0,0,0,0))
-                    # z2 = volume.shape[-3] * (1 - z_ratio)
-                    _crop2 = tio.Crop((int(z1),0,0,0,0,0))
-                    volume = volume.squeeze(0)
-                    volume1 = _crop1(volume)
-                    volume2 = _crop2(volume)
-                    _volume = [volume1, volume2]
-                    _output = []
-
-                    target_size = ds['data'][tio.DATA].squeeze(0).detach().cpu().numpy().shape
-                    final_out = np.zeros(target_size, dtype=np.uint8)
-                   
-
-                    for i, v in enumerate(_volume):
-                        v = v.unsqueeze(0)
-                        v = F.interpolate(v, size= input_resize_size, mode='trilinear')
-                        o = self.model(v)
-                        o = o.squeeze(0)
-                        o = o.detach().cpu().numpy()
-                        resize = tio.Resize((_volume[i][0].shape[0], _volume[i][0].shape[1], _volume[i][0].shape[2]))
-                        o = resize(o)
-                        o = o.squeeze(0)
-                        o = (o > 0.5)
-                        _output.append(o)
-
-                    final_out[:target_size[0]-int(z1),:, :] += _output[0].astype(np.uint8)
-                    final_out[int(z1):,:, :] += _output[1].astype(np.uint8)
-                    output = final_out
-                    output[output>0] = 1
-                else:
-                    volume = F.interpolate(volume, size=input_resize_size, mode='trilinear')
-                    output = self.model(volume)
-                    output = output.squeeze(0)
-                    target_size = ds['data'][tio.DATA].squeeze(0).detach().cpu().numpy().shape
-                    resize = tio.Resize(target_size)
-                    output = output.detach().cpu().numpy()
-                    output = resize(output)
-                    output = output.squeeze(0)
-                    output = (output > 0.5)
-
-                os.makedirs(output_path, exist_ok=True)
-                file_path = os.path.join(output_path, ds.patient+'_pred.seg.nrrd')
-                nrrd.write(file_path, np.uint8(output))
-                logging.info(f'patient {ds.patient} completed, {file_path}.')
+     #TODO: inference code'''
