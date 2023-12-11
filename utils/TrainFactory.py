@@ -44,13 +44,13 @@ class Experiment:
 
         # num_classes = len(self.config.data_loader.labels)
         # if 'Jaccard' in self.config.loss.name or num_classes == 2:
-        num_classes =  len(Anchor_dict) - 1 if self.config.experiment.name == 'Anchor' else len(LABEL_dict) - 1
+        num_classes =  len(Anchor_dict) if self.config.experiment.name == 'Anchor' else len(LABEL_dict)
         self.num_classes = num_classes
         # load model
         model_name = self.config.model.name
         in_ch = 2 if self.config.experiment.name == 'Generation' else 1
 
-        self.model = ModelFactory(model_name, num_classes, in_ch).get().cuda()
+        self.model = ModelFactory(model_name, num_classes, in_ch).get().cuda(self.config.device)
         for m in self.model.modules():
             for child in m.children():
                 if type(child) == torch.nn.BatchNorm3d:
@@ -91,7 +91,7 @@ class Experiment:
             splits='train',
             transform=tio.Compose([
                 # tio.CropOrPad(self.config.data_loader.resize_shape, padding_mode=0),
-                self.config.data_loader.preprocessing,
+                # self.config.data_loader.preprocessing,
                 self.config.data_loader.augmentations,
             ]),
             sampler=self.config.data_loader.sampler_type
@@ -99,12 +99,12 @@ class Experiment:
         self.val_dataset = HaN(
             config = self.config,
             splits='val',
-            transform=self.config.data_loader.preprocessing,
+            # transform=self.config.data_loader.preprocessing,
         )
         self.test_dataset = HaN(
             config = self.config,
             splits='test',
-            transform=self.config.data_loader.preprocessing,
+            # transform=self.config.data_loader.preprocessing,
         )
 
         # queue start loading when used, not when instantiated
@@ -118,7 +118,7 @@ class Experiment:
     def save(self, name):
         if '.pth' not in name:
             name = name + '.pth'
-        path = os.path.join(self.config.project_dir, self.config.title, 'checkpoints', name)
+        path = os.path.join(self.config.project_dir, self.config.experiment.name, 'train', self.config.title, 'checkpoints', name)
         logging.info(f'Saving checkpoint at {path}')
         state = {
             'title': self.config.title,
@@ -148,9 +148,9 @@ class Experiment:
             self.metrics = state['metrics']
 
     def extract_data_from_feature(self, feature):
-        ct_volume = feature['ct'][tio.DATA].float().cuda()
+        ct_volume = feature['ct'][tio.DATA].float().cuda(self.config.device)
         # mr_volume = feature['mr'][tio.DATA].float().cuda()
-        gt = feature['label'][tio.DATA].float().cuda()
+        gt = feature['label'][tio.DATA].float().cuda(self.config.device)
         # volume = volume/255. # normalization
         return ct_volume, gt
 
@@ -163,19 +163,31 @@ class Experiment:
         losses = []
         for i, d in tqdm(enumerate(data_loader), total=len(data_loader), desc=f'Train epoch {str(self.epoch)}'):
             images, gt = self.extract_data_from_feature(d)
-            print(images)
+            l = d['label']['data'][0][0].cpu().detach().numpy()
+            if len(np.unique(l)) == 3:
+                print(images)
 
             self.optimizer.zero_grad()
             with torch.cuda.amp.autocast():
                 preds = self.model(images) # pred shape B, C(N), H, W, D
                 preds_soft = F.softmax(preds, dim=1)
+                # 이미 여기서 thread: [23,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size
                 gt_onehot = torch.nn.functional.one_hot(gt.squeeze().long(), num_classes=self.num_classes)
                 gt_onehot = gt_onehot.unsqueeze(0)
                 gt_onehot = torch.movedim(gt_onehot, -1, 1)
                 assert preds_soft.ndim == gt_onehot.ndim, f'Gt and output dimensions are not the same before loss. {preds_soft.ndim} vs {gt_onehot.ndim}'
-
-                loss = self.loss.losses[self.loss.names[0]](preds_soft, gt_onehot).cuda()
-                losses.append(loss.item())
+                
+                if self.loss.names[0] == 'Dice3DLoss':
+                    loss, dice = self.loss.losses[self.loss.names[0]](preds_soft, gt_onehot)
+                else:
+                    loss = self.loss.losses[self.loss.names[0]](preds_soft, gt_onehot).cuda(self.config.device)
+                try:
+                    losses.append(loss.item())
+                except Exception as e:
+                    print(e)
+                    print(loss)
+                    print(loss.item())
+                    sys.exit()
 
             self.scaler.scale(loss).backward()
             # loss.backward()
@@ -183,14 +195,14 @@ class Experiment:
             # self.optimizer.step()
             self.scaler.update()
 
-            hard_preds = torch.argmax(preds_soft, dim=1)
-            self.evaluator.get_dice(hard_preds, gt)
+            # hard_preds = torch.argmax(preds_soft, dim=1)
+            # self.evaluator.compute_metrics(hard_preds, gt)
+            self.evaluator.add_dice(dice=dice)
 
         epoch_train_loss = sum(losses) / len(losses)
-        epoch_iou, epoch_dice = self.evaluator.mean_metric(phase='Train')
+        epoch_dice = self.evaluator.mean_metric(phase='Train')
 
         self.metrics['Train'] = {
-            'iou': epoch_iou,
             'dice': epoch_dice,
         }
 
@@ -198,11 +210,10 @@ class Experiment:
             f'Epoch': self.epoch,
             f'Train/Loss': epoch_train_loss,
             f'Train/Dice': epoch_dice,
-            f'Train/IoU': epoch_iou,
             f'Train/Lr': self.optimizer.param_groups[0]['lr']
         })
 
-        return epoch_train_loss, epoch_iou, epoch_dice
+        return epoch_train_loss, epoch_dice
 
     def test(self, phase):
 
@@ -222,23 +233,31 @@ class Experiment:
                 images, gt = self.extract_data_from_feature(d)
 
                 output = self.model(images)
+                output_soft = F.softmax(output, dim=1)
+                # 이미 여기서 thread: [23,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size
+                gt_onehot = torch.nn.functional.one_hot(gt.squeeze().long(), num_classes=self.num_classes)
+                gt_onehot = gt_onehot.unsqueeze(0)
+                gt_onehot = torch.movedim(gt_onehot, -1, 1)
                 assert output.ndim == gt.ndim, f'Gt and output dimensions are not the same before loss. {output.ndim} vs {gt.ndim}'
 
-                loss = self.loss.losses[self.loss.names[0]](output, gt).cuda()
+                if self.loss.names[0] == 'Dice3DLoss':
+                    loss, dice = self.loss.losses[self.loss.names[0]](output_soft, gt_onehot)
+                else:
+                    loss = self.loss.losses[self.loss.names[0]](output_soft, gt_onehot)
                 losses.append(loss.item())
-                self.evaluator.get_dice(output, gt)
+                # self.evaluator.compute_metrics(output, gt)
+                self.evaluator.add_dice(dice=dice)
 
             epoch_loss = sum(losses) / len(losses)
-            epoch_iou, epoch_dice = self.evaluator.mean_metric(phase=phase)
+            epoch_dice = self.evaluator.mean_metric(phase=phase)
 
             wandb.log({
                 f'Epoch': self.epoch,
                 f'{phase}/Loss': epoch_loss,
                 f'{phase}/Dice': epoch_dice,
-                f'{phase}/IoU': epoch_iou,
             })
 
-            return epoch_iou, epoch_dice
+            return epoch_dice
         
 
     # def inference(self, output_path, phase='inference', zslide=False):

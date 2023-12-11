@@ -62,6 +62,8 @@ class HaN(tio.SubjectsDataset):
     def _get_subjects_list(self, root, splits):
         # TODO : check the path
         patient_data_list = os.listdir(root)
+        patient_data_list = [entry for entry in patient_data_list if os.path.isdir(os.path.join(root, entry))]
+
         # TODO: change the method, reading whole list and split train/val/test and kfold       
         if self.config.data_loader.kfold == 1:
             train_data, val_data = self._split_data(patient_data_list)
@@ -99,7 +101,7 @@ class HaN(tio.SubjectsDataset):
         sampler = SamplerFactory(config).get()
         queue = tio.Queue(
             subjects_dataset=self,
-            max_length=100,
+            max_length=300,
             samples_per_volume=10,
             sampler=sampler,
             num_workers=config.num_workers,

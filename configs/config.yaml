@@ -1,17 +1,16 @@
 title: test
 project_dir: '/home/jhhan/01_research/01_MICCAI/01_grandchellenge/han_seg/src/HanSeg_2023/experiments'
 seed: 42
-
+device: cuda:2
 experiment:
   name: Anchor # Anchor, MidLine, SmallandHard #Segmentation metadata
 
 data_loader:
   dataset: /home/jhhan/01_research/01_MICCAI/01_grandchellenge/han_seg/data/raw/HaN-Seg/set_1
   kfold: 1  # 1 is not use kfold validation other is use kfold validation
-  preprocessing: configs/preprocessing.yaml
   augmentations: configs/augmentations.yaml
   batch_size: 1
-  num_workers: 0
+  num_workers: 8
   patch_shape:
   - 128
   - 128
@@ -26,7 +25,7 @@ model:
   name: Unet3D
 
 loss:
-  name: DiceCELoss
+  name: Dice3DLoss
 
 lr_scheduler:
   name: Plateau

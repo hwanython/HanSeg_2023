@@ -1,7 +1,15 @@
-Clamp:
-  out_min: -500
-  out_max: 1000
-Resample:
-  target: !!python/tuple [1, 1, 2]
-RescaleIntensity:
-  out_min_max: !!python/tuple [0, 1]
+# Description: Preprocessing configuration file
+source_dir: /home/jhhan/01_research/01_MICCAI/01_grandchellenge/han_seg/data/raw/HaN-Seg/set_1
+save_dir: /home/jhhan/01_research/01_MICCAI/01_grandchellenge/han_seg/data/preprocessed/HaN-Seg/set_1
+
+experiment:
+  name: Anchor 
+
+preprocessing:
+  Clamp:
+    out_min: -500
+    out_max: 1000
+  Resample:
+    target: !!python/tuple [1, 1, 1]
+  RescaleIntensity:
+    out_min_max: !!python/tuple [0, 1]
