@@ -1,16 +1,16 @@
-title: test
-project_dir: '/path/project'
+title: main
+project_dir: '/home/jhhan/01_research/01_MICCAI/01_grandchellenge/han_seg/src/HanSeg_2023/experiments'
 seed: 42
 device: cuda:2
 experiment:
   name: Anchor # Anchor, MidLine, SmallandHard #Segmentation metadata
 
 data_loader:
-  dataset: /data/HaN-Seg/set_1
+  dataset: /home/jhhan/01_research/01_MICCAI/01_grandchellenge/han_seg/data/preprocessed/HaN-Seg/set_1/preprocessing_B3B84D64C6
   kfold: 1  # 1 is not use kfold validation other is use kfold validation
   augmentations: configs/augmentations.yaml
   batch_size: 1
-  num_workers: 8
+  num_workers: 16
   patch_shape:
   - 128
   - 128
@@ -25,19 +25,19 @@ model:
   name: Unet3D
 
 loss:
-  name: Dice3DLoss
+  name: DiceCELoss
 
 lr_scheduler:
-  name: Plateau
+  name: LambdaLR
 
 optimizer:
-  learning_rate: 0.1
-  name: SGD
+  learning_rate: 0.001
+  name: AdamW
 
 trainer:
-  reload: False
-  checkpoint: ''
-  do_train: True
+  reload: True
+  checkpoint: '/home/jhhan/01_research/01_MICCAI/01_grandchellenge/han_seg/src/HanSeg_2023/experiments/Anchor/train/main_1820C18417/checkpoints/best.pth'
+  do_train: False
   do_test: False
-  do_inference: False
+  do_inference: True
   epochs: 1000

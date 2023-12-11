@@ -214,8 +214,5 @@ if __name__ == '__main__':
         # Copy config file to project_dir, to be able to reproduce the experiment
         copy_config_path = os.path.join(output_path, 'config.yaml')
         shutil.copy(args.config, copy_config_path)
-        if config.trainer.inference_zslide:
-            experiment.inference(output_path=output_path, phase="inference", zslide=True)
-        else:
-            experiment.inference(output_path=output_path, phase="inference")
+        experiment.inference(output_path=output_path, phase="Test")
         

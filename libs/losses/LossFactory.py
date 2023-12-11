@@ -84,7 +84,7 @@ class DiceLoss(nn.Module):
         return 1. - torch.mean(dice_score)
     
 
-import torch
+
 
 
 def flatten(tensor):

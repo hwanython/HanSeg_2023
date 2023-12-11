@@ -22,9 +22,11 @@ from torch import nn
 from os import path
 from torch.backends import cudnn
 from tqdm import tqdm
+from torch.utils.data import DataLoader
 
 from datasets.HaN import HaN
 from libs.losses.LossFactory import LossFactory
+from libs.losses.LossFactory import *
 from libs.models.ModelFactory import ModelFactory
 from libs.optimizers.OptimizerFactory import OptimizerFactory
 from libs.schedulers.SchedulerFactory import SchedulerFactory
@@ -163,9 +165,6 @@ class Experiment:
         losses = []
         for i, d in tqdm(enumerate(data_loader), total=len(data_loader), desc=f'Train epoch {str(self.epoch)}'):
             images, gt = self.extract_data_from_feature(d)
-            l = d['label']['data'][0][0].cpu().detach().numpy()
-            if len(np.unique(l)) == 3:
-                print(images)
 
             self.optimizer.zero_grad()
             with torch.cuda.amp.autocast():
@@ -181,6 +180,7 @@ class Experiment:
                     loss, dice = self.loss.losses[self.loss.names[0]](preds_soft, gt_onehot)
                 else:
                     loss = self.loss.losses[self.loss.names[0]](preds_soft, gt_onehot).cuda(self.config.device)
+                    dice = compute_per_channel_dice(preds_soft, gt_onehot)
                 try:
                     losses.append(loss.item())
                 except Exception as e:
@@ -243,7 +243,8 @@ class Experiment:
                 if self.loss.names[0] == 'Dice3DLoss':
                     loss, dice = self.loss.losses[self.loss.names[0]](output_soft, gt_onehot)
                 else:
-                    loss = self.loss.losses[self.loss.names[0]](output_soft, gt_onehot)
+                    dice = compute_per_channel_dice(output_soft, gt_onehot)
+                    loss = self.loss.losses[self.loss.names[0]](output_soft, gt_onehot).cuda(self.config.device)
                 losses.append(loss.item())
                 # self.evaluator.compute_metrics(output, gt)
                 self.evaluator.add_dice(dice=dice)
@@ -260,6 +261,44 @@ class Experiment:
             return epoch_dice
         
 
-    # def inference(self, output_path, phase='inference', zslide=False):
+    def inference(self, output_path, phase='Test'):
+        self.model.eval()
+        with torch.no_grad():
+            torch.cuda.empty_cache()
 
-     #TODO: inference code'''
+            if phase == 'Test':
+                dataset = self.test_dataset
+            elif phase == 'Validation':
+                dataset = self.val_dataset
+            elif phase == 'Train':
+                dataset = self.train_dataset
+
+            for i, subject in tqdm(enumerate(dataset), total=len(dataset), desc=f'{phase} epoch {str(self.epoch)}'):
+                os.makedirs(output_path, exist_ok=True)
+                file_path = os.path.join(output_path, subject.patient+'_pred.seg.nrrd')
+                # final_shape = subject.data.data[0].shape
+                if os.path.exists(file_path) and False:
+                    logging.info(f'skipping {subject.patient}...')
+                    continue
+
+                sampler = tio.inference.GridSampler(
+                    subject,
+                    self.config.data_loader.patch_shape,
+                    0
+                )
+                loader = DataLoader(sampler, batch_size=self.config.data_loader.batch_size)
+                aggregator = tio.inference.GridAggregator(sampler, overlap_mode='hann')
+            
+
+                for j, patch in enumerate(loader):
+                    images = patch['ct'][tio.DATA].float().cuda(self.config.device) 
+                    preds = self.model(images)
+                    aggregator.add_batch(preds, patch[tio.LOCATION])
+                   
+                output = aggregator.get_output_tensor()
+                output_soft = F.softmax(output, dim=1)
+                hard_output = torch.argmax(output_soft, dim=0)
+                # hard_output = hard_output.squeeze(0)
+                output = hard_output.detach().cpu().numpy()
+                nrrd.write(file_path, np.uint8(output))
+                logging.info(f'patient {subject.patient} completed, {file_path}.')

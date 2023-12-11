@@ -17,6 +17,7 @@ class HaN(tio.SubjectsDataset):
     """
     def __init__(self, config, splits, transform=None, sampler=None, **kwargs):
         self.config = config
+        self.splits = splits
         self.root = Path(self.config.data_loader.dataset)
         if not isinstance(splits, list):
             splits = [splits]
@@ -109,5 +110,5 @@ class HaN(tio.SubjectsDataset):
             shuffle_patches=True, 
             start_background=False,
         )
-        loader = DataLoader(queue, batch_size=config.batch_size, num_workers=config.num_workers, pin_memory=True)
+        loader =  DataLoader(queue, batch_size=config.batch_size, num_workers=0, pin_memory=True)
         return loader
