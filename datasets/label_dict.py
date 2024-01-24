@@ -33,12 +33,12 @@ LABEL_dict = {
 }
 
 Anchor_dict = {
-    "background": 0,
-    "Bone_Mandible": 4,
-    "Brainstem": 5,
-    "Eye_AL": 12,
-    "Eye_AR": 13,
-    "Eye_PL": 14,
-    "Eye_PR": 15,
-    "SpinalCord": 30,
+    "background": 0, # 0 
+    "Bone_Mandible": 4, # 1
+    "Brainstem": 5, # 2
+    "Eye_AL": 12, # 3
+    "Eye_AR": 13, # 4
+    "Eye_PL": 14, # 5
+    "Eye_PR": 15, # 6
+    "SpinalCord": 30, # 7
 }

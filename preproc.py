@@ -71,6 +71,7 @@ if __name__ == '__main__':
     # main
     patient_data_list = os.listdir(source_dir)
     subjects = []
+    table = []
     for patient in patient_data_list:
         # generate labels
         ct_data_path = os.path.join(source_dir, patient, patient + '_IMG_CT.nrrd')
@@ -86,9 +87,9 @@ if __name__ == '__main__':
         subject_dict = {
 
             'patient': patient,
-            'ct': tio.ScalarImage(ct_data_path, reader=_nrrd_reader),
-            # 'mr': tio.ScalarImage(mr_data_path, reader=self._nrrd_reader),
-            'label': tio.LabelMap(label_path, reader=_nrrd_reader),
+            'ct': tio.ScalarImage(ct_data_path),
+            # 'mr': tio.ScalarImage(mr_data_path),
+            'label': tio.LabelMap(label_path),
         }
         
         # preprocessing
@@ -98,11 +99,23 @@ if __name__ == '__main__':
         os.makedirs(os.path.join(save_dir, patient), exist_ok=True)
         ct_data_path = os.path.join(save_dir, patient, patient + '_IMG_CT.nrrd')
         label_path = os.path.join(save_dir, patient, patient + f'_{preproc.experiment.name}.seg.nrrd')
-        nrrd.write(ct_data_path, transform_subject['ct'][tio.DATA].squeeze(0).numpy())
-        nrrd.write(label_path, transform_subject['label'][tio.DATA].squeeze(0).numpy())
+
+        transformed_ct_data = transform_subject['ct'][tio.DATA].squeeze(0).numpy()
+        transformed_label_data = transform_subject['label'][tio.DATA].squeeze(0).numpy()
+
+        nrrd.write(ct_data_path, transformed_ct_data)
+        nrrd.write(label_path, transformed_label_data)
+
         print(f"Saved {patient} patients")
         subjects.append(tio.Subject(**subject_dict))
 
+        if preproc.check_preprocessing:
+            # check preprocessing
+            info = [patient, transformed_ct_data.shape, transformed_label_data.shape, np.unique(transformed_label_data)]  
+            table.append(info)
+
     print(f"Completed {len(subjects)} patients")
+    df = pd.DataFrame(table, columns=['data_name', 'CT_shape', 'label_shape', 'label_unique'])
+    df.to_csv(os.path.join(save_dir, 'preprocessing.csv'), index=True)
         
     

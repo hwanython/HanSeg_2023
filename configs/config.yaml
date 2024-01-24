@@ -6,19 +6,20 @@ experiment:
   name: Anchor # Anchor, MidLine, SmallandHard #Segmentation metadata
 
 data_loader:
-  dataset: /home/jhhan/01_research/01_MICCAI/01_grandchellenge/han_seg/data/preprocessed/HaN-Seg/set_1/preprocessing_B3B84D64C6
+  dataset: /home/jhhan/01_research/01_MICCAI/01_grandchellenge/han_seg/data/preprocessed/HaN-Seg/set_1/preprocessing_7CB7AA3181
   kfold: 1  # 1 is not use kfold validation other is use kfold validation
   augmentations: configs/augmentations.yaml
   batch_size: 1
   num_workers: 16
+  patch_loader: False
   patch_shape:
   - 128
   - 128
   - 64
   resize_shape:
-  - 168
-  - 280
-  - 360
+  - 288 # x
+  - 288 # y
+  - 64  # z
   sampler_type: UniformSampler 
 
 model:
@@ -35,9 +36,9 @@ optimizer:
   name: AdamW
 
 trainer:
-  reload: True
-  checkpoint: '/home/jhhan/01_research/01_MICCAI/01_grandchellenge/han_seg/src/HanSeg_2023/experiments/Anchor/train/main_1820C18417/checkpoints/best.pth'
-  do_train: False
+  reload: False
+  checkpoint: ''
+  do_train: True
   do_test: False
-  do_inference: True
+  do_inference: False
   epochs: 1000

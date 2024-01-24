@@ -13,3 +13,5 @@ preprocessing:
     target: !!python/tuple [1, 1, 1]
   RescaleIntensity:
     out_min_max: !!python/tuple [0, 1]
+
+check_preprocessing: True

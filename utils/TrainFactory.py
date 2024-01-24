@@ -88,23 +88,32 @@ class Experiment:
 
         # load evaluator
         self.evaluator = Evaluator(classes=num_classes)
+        if self.config.data_loader.patch_loader:
+            tranform = tio.Compose([
+                tio.CropOrPad(self.config.data_loader.resize_shape, padding_mode=4),
+                # self.config.data_loader.preprocessing,
+                self.config.data_loader.augmentations])
+        else:
+            tranform = tio.Compose([
+                tio.Resize(self.config.data_loader.resize_shape),
+                # self.config.data_loader.preprocessing,
+                self.config.data_loader.augmentations])
+            
         self.train_dataset = HaN(
             config = self.config,
             splits='train',
-            transform=tio.Compose([
-                # tio.CropOrPad(self.config.data_loader.resize_shape, padding_mode=0),
-                # self.config.data_loader.preprocessing,
-                self.config.data_loader.augmentations,
-            ]),
+            transform=tranform,
             sampler=self.config.data_loader.sampler_type
         )
         self.val_dataset = HaN(
             config = self.config,
+             transform=tranform,
             splits='val',
             # transform=self.config.data_loader.preprocessing,
         )
         self.test_dataset = HaN(
             config = self.config,
+             transform=tranform,
             splits='test',
             # transform=self.config.data_loader.preprocessing,
         )
@@ -158,6 +167,8 @@ class Experiment:
 
     def train(self):
 
+        # self.num_classes
+        
         self.model.train()
         self.evaluator.reset_eval()
 
@@ -170,11 +181,14 @@ class Experiment:
             with torch.cuda.amp.autocast():
                 preds = self.model(images) # pred shape B, C(N), H, W, D
                 preds_soft = F.softmax(preds, dim=1)
-                # 이미 여기서 thread: [23,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size
-                gt_onehot = torch.nn.functional.one_hot(gt.squeeze().long(), num_classes=self.num_classes)
-                gt_onehot = gt_onehot.unsqueeze(0)
-                gt_onehot = torch.movedim(gt_onehot, -1, 1)
+                # 이미 여기서 thread: [23,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size -> patch base 일 경우
+                # gt shape B, C(N), H, W, D and C(N) -> C(N) is one-hot encoded
+                gt_onehot = F.one_hot(gt.squeeze(0).long(), num_classes=self.num_classes).permute(0, 4, 1, 2, 3)
                 assert preds_soft.ndim == gt_onehot.ndim, f'Gt and output dimensions are not the same before loss. {preds_soft.ndim} vs {gt_onehot.ndim}'
+                # ignore background
+                preds_soft = preds_soft[:, 1:, ...]
+                gt_onehot = gt_onehot[:, 1:, ...]
+
                 
                 if self.loss.names[0] == 'Dice3DLoss':
                     loss, dice = self.loss.losses[self.loss.names[0]](preds_soft, gt_onehot)
@@ -232,19 +246,19 @@ class Experiment:
             for i, d in tqdm(enumerate(data_loader), total=len(data_loader), desc=f'{phase} epoch {str(self.epoch)}'):
                 images, gt = self.extract_data_from_feature(d)
 
-                output = self.model(images)
-                output_soft = F.softmax(output, dim=1)
-                # 이미 여기서 thread: [23,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size
-                gt_onehot = torch.nn.functional.one_hot(gt.squeeze().long(), num_classes=self.num_classes)
-                gt_onehot = gt_onehot.unsqueeze(0)
-                gt_onehot = torch.movedim(gt_onehot, -1, 1)
-                assert output.ndim == gt.ndim, f'Gt and output dimensions are not the same before loss. {output.ndim} vs {gt.ndim}'
+                preds = self.model(images)
+                preds_soft = F.softmax(preds, dim=1)
+                gt_onehot = F.one_hot(gt.squeeze(0).long(), num_classes=self.num_classes).permute(0, 4, 1, 2, 3)
+                assert preds_soft.ndim == gt_onehot.ndim, f'Gt and output dimensions are not the same before loss. {preds_soft.ndim} vs {gt_onehot.ndim}'
+                # ignore background
+                preds_soft = preds_soft[:, 1:, ...]
+                gt_onehot = gt_onehot[:, 1:, ...]
 
                 if self.loss.names[0] == 'Dice3DLoss':
-                    loss, dice = self.loss.losses[self.loss.names[0]](output_soft, gt_onehot)
+                    loss, dice = self.loss.losses[self.loss.names[0]](preds_soft, gt_onehot)
                 else:
-                    dice = compute_per_channel_dice(output_soft, gt_onehot)
-                    loss = self.loss.losses[self.loss.names[0]](output_soft, gt_onehot).cuda(self.config.device)
+                    dice = compute_per_channel_dice(preds_soft, gt_onehot)
+                    loss = self.loss.losses[self.loss.names[0]](preds_soft, gt_onehot).cuda(self.config.device)
                 losses.append(loss.item())
                 # self.evaluator.compute_metrics(output, gt)
                 self.evaluator.add_dice(dice=dice)

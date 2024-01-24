@@ -30,12 +30,6 @@ class HaN(tio.SubjectsDataset):
         data = torch.from_numpy(np.load(path)).float()
         affine = torch.eye(4, requires_grad=False)
         return data, affine
-
-    def _nrrd_reader(self, path):
-        raw_data, _ = nrrd.read(path)
-        data = torch.from_numpy(raw_data).float()
-        affine = torch.eye(4, requires_grad=False)  # Identity matrix(단위 행렬)
-        return data, affine
     
     def _split_data(self, data_list):
         # train and val data split
@@ -88,9 +82,9 @@ class HaN(tio.SubjectsDataset):
                 subject_dict = {
                     'partition': split,
                     'patient': patient,
-                    'ct': tio.ScalarImage(ct_data_path, reader=self._nrrd_reader),
+                    'ct': tio.ScalarImage(ct_data_path),
                     # 'mr': tio.ScalarImage(mr_data_path, reader=self._nrrd_reader),
-                    'label': tio.LabelMap(label_path, reader=self._nrrd_reader),
+                    'label': tio.LabelMap(label_path,),
                 }
 
                 subjects.append(tio.Subject(**subject_dict))
@@ -98,17 +92,21 @@ class HaN(tio.SubjectsDataset):
         return subjects
 
     def get_loader(self, config):
-        #todo
-        sampler = SamplerFactory(config).get()
-        queue = tio.Queue(
-            subjects_dataset=self,
-            max_length=300,
-            samples_per_volume=10,
-            sampler=sampler,
-            num_workers=config.num_workers,
-            shuffle_subjects=True,
-            shuffle_patches=True, 
-            start_background=False,
-        )
-        loader =  DataLoader(queue, batch_size=config.batch_size, num_workers=0, pin_memory=True)
+        # patch-based training
+        if config.patch_loader:
+            sampler = SamplerFactory(config).get()
+            queue = tio.Queue(
+                subjects_dataset=self,
+                max_length=300,
+                samples_per_volume=10,
+                sampler=sampler,
+                num_workers=config.num_workers,
+                shuffle_subjects=True,
+                shuffle_patches=True, 
+                start_background=False,
+            )
+            loader =  DataLoader(queue, batch_size=config.batch_size, num_workers=0, pin_memory=True)
+        else: # subject-based training
+            dataset = tio.SubjectsDataset(self._subjects, transform=self._transform)
+            loader = DataLoader(dataset, batch_size=config.batch_size, num_workers=config.num_workers, pin_memory=True)
         return loader
