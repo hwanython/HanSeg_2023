@@ -1,6 +1,8 @@
 import time
 import SimpleITK as sitk
 import numpy as np
+import os
+os.environ['OPENBLAS_NUM_THREADS'] = '1'
 np.lib.index_tricks.int = np.uint16
 import ants
 from os.path import join
@@ -104,39 +106,41 @@ class MyHanseg2023Algorithm(Hanseg2023Algorithm):
         del ct_image
         # Shamelessly copied from nnUNet/nnunetv2/preprocessing/resampling/default_resampling.py
         new_shape = np.array([int(round(i / j * k)) for i, j, k in zip(fin_spacing, spacing[::-1], fin_size)])
-        if new_shape.prod()<  1e8:
-            print(f"Image is not too large ({new_shape.prod()}), using the folds (0,1,2,3,4) with mirror")
-            predictor = nnUNetPredictor(tile_step_size=0.4, use_mirroring=True, perform_everything_on_gpu=True,
-                                        verbose=True, verbose_preprocessing=True,
-                                        allow_tqdm=True)
-            predictor.initialize_from_trained_model_folder(trained_model_path, use_folds=(0,1,2,3),
-                                                           checkpoint_name="checkpoint_best.pth")
-            # predictor.allowed_mirroring_axes = (0, 2)
-        elif new_shape.prod()< 1.3e8:
-            print(f"Image is not too large ({new_shape.prod()}), using the folds (0,1,2,3,4)")
+        # if new_shape.prod()<  1e8:
+        #     print(f"Image is not too large ({new_shape.prod()}), using the folds (0,1,2,3,4) with mirror")
+        #     predictor = nnUNetPredictor(tile_step_size=0.4, use_mirroring=True, perform_everything_on_gpu=True,
+        #                                 verbose=True, verbose_preprocessing=True,
+        #                                 allow_tqdm=True)
+        #     predictor.initialize_from_trained_model_folder(trained_model_path, use_folds=(0,1,2,3),
+        #                                                    checkpoint_name="checkpoint_best.pth")
+        #     # predictor.allowed_mirroring_axes = (0, 2)
+        # elif new_shape.prod()< 1.3e8:
+        #     print(f"Image is not too large ({new_shape.prod()}), using the folds (0,1,2,3,4)")
 
-            predictor = nnUNetPredictor(tile_step_size=0.6, use_mirroring=True, perform_everything_on_gpu=False,
-                                        verbose=True, verbose_preprocessing=True,
-                                        allow_tqdm=True)
-            predictor.initialize_from_trained_model_folder(trained_model_path, use_folds=(0,1,2,3), #(0,1,2,3,4)
-                                                           checkpoint_name="checkpoint_best.pth")
-        elif new_shape.prod()< 1.7e8:
-            print(f"Image is not too large ({new_shape.prod()}), using the 'all' fold with mirror")
+        #     predictor = nnUNetPredictor(tile_step_size=0.6, use_mirroring=True, perform_everything_on_gpu=False,
+        #                                 verbose=True, verbose_preprocessing=True,
+        #                                 allow_tqdm=True)
+        #     predictor.initialize_from_trained_model_folder(trained_model_path, use_folds=(0,1,2,3), #(0,1,2,3,4)
+        #                                                    checkpoint_name="checkpoint_best.pth")
+        # elif new_shape.prod()< 1.7e8:
+        #     print(f"Image is not too large ({new_shape.prod()}), using the 'all' fold with mirror")
 
-            predictor = nnUNetPredictor(tile_step_size=0.4, use_mirroring=True, perform_everything_on_gpu=False,
-                                        verbose=True, verbose_preprocessing=True,
-                                        allow_tqdm=True)
-            predictor.initialize_from_trained_model_folder(trained_model_path, use_folds="0",
-                                                           checkpoint_name="checkpoint_best.pth")
-            # predictor.allowed_mirroring_axes = (0, 2)
+        #     predictor = nnUNetPredictor(tile_step_size=0.4, use_mirroring=True, perform_everything_on_gpu=False,
+        #                                 verbose=True, verbose_preprocessing=True,
+        #                                 allow_tqdm=True)
+        #     predictor.initialize_from_trained_model_folder(trained_model_path, use_folds="0",
+        #                                                    checkpoint_name="checkpoint_best.pth")
+        #     # predictor.allowed_mirroring_axes = (0, 2)
 
-        else:
-            predictor = nnUNetPredictor(tile_step_size=0.6, use_mirroring=True, perform_everything_on_gpu=False,
-                                        verbose=True, verbose_preprocessing=True,
-                                        allow_tqdm=True)
-            print(f"Image is too large ({new_shape.prod()}), using the 'all' fold")
-            predictor.initialize_from_trained_model_folder(trained_model_path, use_folds="0",
-                                                           checkpoint_name="checkpoint_best.pth")
+        # else:
+        predictor = nnUNetPredictor(tile_step_size=0.5, use_mirroring=False, perform_everything_on_gpu=True,
+                                    verbose=True, verbose_preprocessing=True,
+                                    allow_tqdm=True)
+        print(f"Image is too large ({new_shape.prod()}), using the 'all' fold")
+        predictor.initialize_from_trained_model_folder(trained_model_path, use_folds="0",
+                                                        checkpoint_name="checkpoint_best.pth")
+        # predictor.initialize_from_trained_model_folder(trained_model_path, use_folds=(0,1,2,3), #(0,1,2,3,4)
+                                                        #    checkpoint_name="checkpoint_best.pth")
 
         img_temp = predictor.predict_single_npy_array(images, properties, None, None, False).astype(np.uint8)
         del images

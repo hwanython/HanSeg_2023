@@ -1,13 +1,39 @@
-# DMX Solution to HaNSeg Challenge
+# DMX Solution to HaNSeg
 
-The Head and Neck oragan-at-risk CT & MR segmentation challenge. Contribution to the Grand Challenge (MICCAI 2023)
+## Overview
 
-Challenge URL: **[HaN-Seg 2023 challenge](https://han-seg2023.grand-challenge.org/)**
+This repository contains scripts and tools for building a Docker algorithm, performing prediction on a test dataset, and calculating DSC (Dice Similarity Coefficient). Below are the steps to execute each of these tasks.
 
-This solution is based on:
+## Prerequisites
 
- - [ANTsPY](https://antspy.readthedocs.io/en/latest/)
- - [nnUNetv2](https://github.com/MIC-DKFZ/nnUNet/)
- - [Zhack47](https://github.com/Zhack47/HaNSeg-QuantIF)
+Make sure you have the following installed:
+- Docker
+- Python 3.9
+- Necessary Python packages (can be installed using `requirements.txt` if provided)
 
+## Steps
 
+### 1. Build the Docker Algorithm
+
+To build the Docker algorithm, run the following command in your terminal:
+
+```sh
+sh test.sh
+```
+
+### 2. Prediction on Test Dataset
+
+To perform predictions on the test dataset, execute the following command:
+```sh
+python3 process.py
+```
+
+### 3. DSC Calculation
+
+To calculate the Dice Similarity Coefficient (DSC), use the following command:
+```sh
+python3 calc_dice.py
+```
+
+## Contact
+Email: jaehwanhan12@gmail.com

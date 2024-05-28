@@ -1,37 +1,37 @@
 #!/usr/bin/env bash
-
+# 현재 디렉토리 서칭
 SCRIPTPATH="$( cd "$(dirname "$0")" ; pwd -P )"
-echo $SCRIPTPATH
+echo $SCRIPTPATH 
 OUTDIR=$SCRIPTPATH/output
 
 ./build.sh
 
+# Ensure output directory exists and set permissions
+mkdir -p $OUTDIR
+chmod -R 777 $OUTDIR
+
 # Maximum is currently 30g, configurable in your algorithm image settings on grand challenge
-MEM_LIMIT="12g"
+MEM_LIMIT="30g"
 
 # create output dir if it does not exist
 if [ ! -d $OUTDIR ]; then
   mkdir $OUTDIR;
 fi
 echo "starting docker"
-# Do not change any of the parameters to docker run, these are fixed
-docker run --rm \
-        --memory="${MEM_LIMIT}" \
-        --memory-swap="${MEM_LIMIT}" \
-        --network="none" \
-        --cap-drop="ALL" \
-        --security-opt="no-new-privileges" \
-        --shm-size="128m" \
-        --pids-limit="256" \
-        --gpus="0" \
-        -v $SCRIPTPATH/test/:/input/ \
-        -v $SCRIPTPATH/output/:/output \
-        hanseg2023algorithm_dmx
-echo "docker done"
+docker run --rm --name hanseg_algorithm_container \
+    --memory="${MEM_LIMIT}" \
+    --memory-swap="${MEM_LIMIT}" \
+    --network="none" \
+    --cap-drop="ALL" \
+    --security-opt="no-new-privileges" \
+    --shm-size="4g" \
+    --pids-limit="512" \
+    --gpus="all" \
+    -v $SCRIPTPATH/input/:/input/ \
+    -v $SCRIPTPATH/output/:/output \
+    -e LOCAL_USER_ID=$(id -u) \
+    -e LOCAL_GROUP_ID=$(id -g) \
+    -it --entrypoint bash \
+    hanseg2023algorithm_dmx:jhhan
 
-echo
-echo
-echo "Compare files in $OUTDIR with the expected results to see if test is successful"
-docker run --rm \
-        -v $OUTDIR:/output/ \
-        python:3.8-slim ls -al /output/images/head_neck_oar
+echo "docker done"
